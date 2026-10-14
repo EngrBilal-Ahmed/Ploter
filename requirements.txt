@@ -2,3 +2,4 @@ matplotlib
 mplcursors
 pandas
 psxdata
+nicegui

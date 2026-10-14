@@ -22,6 +22,40 @@ def initialize_database(connection):
         )
         """
     )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS app_settings (
+            setting_key TEXT PRIMARY KEY,
+            setting_value TEXT NOT NULL
+        )
+        """
+    )
+
+
+def load_stock_list(database_file):
+    """Return the stock-list text saved by the GUI, if there is one."""
+    with sqlite3.connect(database_file) as connection:
+        initialize_database(connection)
+        row = connection.execute(
+            "SELECT setting_value FROM app_settings WHERE setting_key = ?",
+            ("stock_list",),
+        ).fetchone()
+    return row[0] if row else None
+
+
+def save_stock_list(stock_list, database_file):
+    """Save the raw GUI stock-list text without changing its pasted format."""
+    with sqlite3.connect(database_file) as connection:
+        initialize_database(connection)
+        connection.execute(
+            """
+            INSERT INTO app_settings (setting_key, setting_value)
+            VALUES (?, ?)
+            ON CONFLICT(setting_key) DO UPDATE SET setting_value = excluded.setting_value
+            """,
+            ("stock_list", stock_list),
+        )
+        connection.commit()
 
 
 def clean_price_data(df, stock_name):
