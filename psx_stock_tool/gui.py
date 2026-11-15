@@ -36,7 +36,7 @@ def build_page() -> None:
     ui.add_head_html("""
         <style>
             body { background: #f8fafc; }
-            .page-shell { max-width: 1080px; margin: 0 auto; }
+            .page-shell { max-width: 1440px; margin: 0 auto; }
             .stock-card { border: 1px solid #e2e8f0; box-shadow: 0 10px 30px rgba(15, 23, 42, .07); }
             .stock-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(145px, 1fr)); gap: 8px; }
         </style>

@@ -60,7 +60,18 @@ def clean_price_data(df, stock_name):
     return df.loc[valid_ohlc].dropna(subset=["date", *ohlc_columns]).sort_values("date")
 
 
-def download_and_cache(connection, stock_name, start_date, end_date):
+def calculate_intraday_ranges(frame):
+    """Keep the original high/low range calculation shared by both plotters."""
+    frame = frame.copy()
+    frame["daily_range"] = frame["high"] - frame["low"]
+    frame["gain_per_rupee"] = frame["daily_range"] / frame["low"].where(frame["low"].ne(0))
+    frame["intraday_range_percent"] = frame["gain_per_rupee"] * 100
+    return frame
+
+
+def download_and_cache(
+    connection, stock_name, start_date, end_date, *, raise_on_download_error=False
+):
     """Download a period and replace cached records for the same stock and date."""
     if start_date > end_date:
         return
@@ -68,6 +79,8 @@ def download_and_cache(connection, stock_name, start_date, end_date):
     try:
         downloaded = psxdata.stocks(stock_name, start=start_date, end=end_date)
     except Exception as error:
+        if raise_on_download_error:
+            raise
         print(f"{stock_name}: download failed ({error}); using cached data.")
         return
 
@@ -77,7 +90,7 @@ def download_and_cache(connection, stock_name, start_date, end_date):
     connection.commit()
 
 
-def get_stock_data(stock_name, config):
+def get_stock_data(stock_name, config, *, raise_on_download_error=False):
     """Read cached data and download only missing history plus recent values."""
     stock_name = stock_name.strip().upper()
     end_date = date.today()
@@ -90,7 +103,10 @@ def get_stock_data(stock_name, config):
         ).fetchone()[0]
 
         if first_cached is None:
-            download_and_cache(connection, stock_name, start_date, end_date)
+            download_and_cache(
+                connection, stock_name, start_date, end_date,
+                raise_on_download_error=raise_on_download_error,
+            )
         else:
             first_cached_date = date.fromisoformat(first_cached)
             if start_date < first_cached_date:
@@ -99,10 +115,14 @@ def get_stock_data(stock_name, config):
                     stock_name,
                     start_date,
                     first_cached_date - timedelta(days=1),
+                    raise_on_download_error=raise_on_download_error,
                 )
 
             refresh_start = max(start_date, end_date - timedelta(days=config.refresh_days))
-            download_and_cache(connection, stock_name, refresh_start, end_date)
+            download_and_cache(
+                connection, stock_name, refresh_start, end_date,
+                raise_on_download_error=raise_on_download_error,
+            )
 
         return pd.read_sql_query(
             """

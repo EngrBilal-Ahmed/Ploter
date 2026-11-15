@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 import mplcursors
 import pandas as pd
 
-from .data import get_stock_data
+from .data import calculate_intraday_ranges, get_stock_data
 
 
 def maximize_figure(fig):
@@ -74,9 +74,7 @@ def plot_stock(stock_name, config):
             _, value = selection.target
             selection.annotation.set_text(f"Value: {value:.2f}")
 
-    df["daily_range"] = df["high"] - df["low"]
-    df["gain_per_rupee"] = df["daily_range"] / df["low"].replace(0, pd.NA)
-    df["intraday_range_percent"] = df["gain_per_rupee"] * 100
+    df = calculate_intraday_ranges(df)
     min_range_percent = df["intraday_range_percent"].min()
     max_range_percent = df["intraday_range_percent"].max()
     range_bars = ax_range.bar(
