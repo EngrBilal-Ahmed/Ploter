@@ -1,40 +1,17 @@
+from contextlib import closing
 from datetime import date, timedelta
 import sqlite3
 
 import pandas as pd
 import psxdata
 
-
-def initialize_database(connection):
-    """Create the local price cache when the script runs for the first time."""
-    connection.execute(
-        """
-        CREATE TABLE IF NOT EXISTS stock_prices (
-            symbol TEXT NOT NULL,
-            date TEXT NOT NULL,
-            open REAL,
-            high REAL,
-            low REAL,
-            close REAL,
-            volume REAL,
-            fetched_at TEXT NOT NULL,
-            PRIMARY KEY (symbol, date)
-        )
-        """
-    )
-    connection.execute(
-        """
-        CREATE TABLE IF NOT EXISTS app_settings (
-            setting_key TEXT PRIMARY KEY,
-            setting_value TEXT NOT NULL
-        )
-        """
-    )
+from .database import initialize_database
+from .ingestion import cache_api_prices
 
 
 def load_stock_list(database_file):
     """Return the stock-list text saved by the GUI, if there is one."""
-    with sqlite3.connect(database_file) as connection:
+    with closing(sqlite3.connect(database_file)) as connection, connection:
         initialize_database(connection)
         row = connection.execute(
             "SELECT setting_value FROM app_settings WHERE setting_key = ?",
@@ -45,7 +22,7 @@ def load_stock_list(database_file):
 
 def save_stock_list(stock_list, database_file):
     """Save the raw GUI stock-list text without changing its pasted format."""
-    with sqlite3.connect(database_file) as connection:
+    with closing(sqlite3.connect(database_file)) as connection, connection:
         initialize_database(connection)
         connection.execute(
             """
@@ -94,39 +71,19 @@ def download_and_cache(connection, stock_name, start_date, end_date):
         print(f"{stock_name}: download failed ({error}); using cached data.")
         return
 
-    downloaded = clean_price_data(downloaded, stock_name)
-    if downloaded.empty:
-        return
-
-    downloaded["date"] = downloaded["date"].dt.strftime("%Y-%m-%d")
-    downloaded["fetched_at"] = pd.Timestamp.now().isoformat()
-    downloaded = downloaded.astype(object).where(pd.notna(downloaded), None)
-    records = downloaded[
-        ["date", "open", "high", "low", "close", "volume", "fetched_at"]
-    ].itertuples(index=False, name=None)
-    connection.executemany(
-        """
-        INSERT INTO stock_prices (symbol, date, open, high, low, close, volume, fetched_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(symbol, date) DO UPDATE SET
-            open = excluded.open,
-            high = excluded.high,
-            low = excluded.low,
-            close = excluded.close,
-            volume = excluded.volume,
-            fetched_at = excluded.fetched_at
-        """,
-        ((stock_name, *record) for record in records),
-    )
+    summary = cache_api_prices(connection, downloaded, stock_name, start_date, end_date)
+    if summary.skipped:
+        print(f"{stock_name}: skipped {summary.skipped} invalid or duplicate price row(s).")
     connection.commit()
 
 
 def get_stock_data(stock_name, config):
     """Read cached data and download only missing history plus recent values."""
+    stock_name = stock_name.strip().upper()
     end_date = date.today()
     start_date = end_date - timedelta(days=config.total_days)
 
-    with sqlite3.connect(config.database_file) as connection:
+    with closing(sqlite3.connect(config.database_file)) as connection, connection:
         initialize_database(connection)
         first_cached = connection.execute(
             "SELECT MIN(date) FROM stock_prices WHERE symbol = ?", (stock_name,)
