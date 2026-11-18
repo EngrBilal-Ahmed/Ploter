@@ -7,11 +7,13 @@ import sqlite3
 
 import pandas as pd
 
+from .charting import circuit_price_series
 from .data import calculate_intraday_ranges
 from .database import initialize_database
+from .surveillance import SignalConfig, analyze_circuits
 
 
-def load_intraday_history(database_file, symbols, days):
+def load_intraday_history(database_file, symbols, days, circuit_config=SignalConfig()):
     """Read each symbol's last calendar-day window without downloading prices."""
     if not isinstance(days, int) or days < 1:
         raise ValueError("History days must be a whole number of at least 1")
@@ -28,14 +30,21 @@ def load_intraday_history(database_file, symbols, days):
             start = date.fromisoformat(latest) - timedelta(days=days - 1)
             frame = pd.read_sql_query(
                 """
-                SELECT date, open, high, low, close, volume
+                SELECT date, ldcp, open, high, low, close, volume
                 FROM stock_prices
-                WHERE symbol = ? AND date BETWEEN ? AND ?
+                WHERE symbol = ? AND date BETWEEN COALESCE(
+                    (SELECT MAX(date) FROM stock_prices WHERE symbol = ? AND date < ?), ?
+                ) AND ?
                 ORDER BY date
                 """,
-                connection, params=(symbol, start.isoformat(), latest), parse_dates=["date"],
+                connection,
+                params=(symbol, symbol, start.isoformat(), start.isoformat(), latest),
+                parse_dates=["date"],
             )
-            frames[symbol] = calculate_intraday_ranges(frame)
+            frame = analyze_circuits(frame, circuit_config)
+            frames[symbol] = calculate_intraday_ranges(
+                frame.loc[frame["date"] >= pd.Timestamp(start)].reset_index(drop=True)
+            )
     return frames
 
 
@@ -55,15 +64,17 @@ def session_rows(frame):
     ]
 
 
-def intraday_chart_options(frame, price_graphs):
+def intraday_chart_options(frame, price_graphs, *, price_view="line"):
     """Link price, daily range and volume through both shared zoom controls."""
+    if price_view not in ("line", "candlestick"):
+        raise ValueError("Price view must be line or candlestick")
     days = frame["date"].dt.strftime("%Y-%m-%d").tolist()
 
     def values(column):
         return [_number(value) for value in frame[column]]
 
     series = []
-    for column, label in price_graphs:
+    for column, label in (price_graphs if price_view == "line" else []):
         series.append({
             "name": label, "type": "line", "xAxisIndex": 0, "yAxisIndex": 0,
             "data": values(column), "symbol": "circle", "symbolSize": 5,
@@ -82,6 +93,12 @@ def intraday_chart_options(frame, price_graphs):
                 ] if not frame.empty else [],
             },
         })
+    if price_view == "candlestick":
+        series = [
+            {**item, "xAxisIndex": 0, "yAxisIndex": 0}
+            for item in circuit_price_series(frame)
+        ]
+    price_legend = [item["name"] for item in series]
     series.extend([
         {
             "name": "Intraday range (%)", "type": "bar", "xAxisIndex": 1, "yAxisIndex": 1,
@@ -107,12 +124,13 @@ def intraday_chart_options(frame, price_graphs):
     return {
         "animation": False,
         "title": [
-            {"text": "OHLC price (Rs.)", "left": 65, "top": 8},
+            {"text": "OHLC candlesticks & estimated circuits (Rs.)"
+             if price_view == "candlestick" else "OHLC price (Rs.)", "left": 65, "top": 8},
             {"text": "Intraday high/low range (%)", "left": 65, "top": 385},
             {"text": "Daily traded volume", "left": 65, "top": 615},
         ],
-        "legend": {"data": [label for _, label in price_graphs], "top": 35},
-        "tooltip": {"trigger": "axis", "axisPointer": {"type": "cross"}},
+        "legend": {"data": price_legend, "top": 35},
+        "tooltip": {"trigger": "axis", "confine": True, "axisPointer": {"type": "cross"}},
         "axisPointer": {"link": [{"xAxisIndex": "all"}]},
         "grid": [
             {"left": 80, "right": 40, "top": 80, "height": 260},

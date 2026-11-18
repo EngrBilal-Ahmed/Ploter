@@ -31,8 +31,8 @@ class SignalConfig:
             raise ValueError("Invalid circuit or volume settings")
 
 
-def analyze_prices(prices, config=SignalConfig(), market_dates=None):
-    """Calculate features using only the current candle and preceding observations."""
+def analyze_circuits(prices, config=SignalConfig()):
+    """Calculate indicative limits and touches from each candle and prior close."""
     frame = prices.sort_values("date").drop_duplicates("date", keep="last").copy()
     if frame.empty:
         return frame
@@ -55,6 +55,15 @@ def analyze_prices(prices, config=SignalConfig(), market_dates=None):
         )
     frame["upper_retreat"] = frame["upper_touch"] & ~frame["upper_close"]
     frame["lower_rebound"] = frame["lower_touch"] & ~frame["lower_close"]
+    frame["change_pct"] = ((frame["close"] - reference) / reference) * 100
+    return frame.reset_index(drop=True)
+
+
+def analyze_prices(prices, config=SignalConfig(), market_dates=None):
+    """Calculate features using only the current candle and preceding observations."""
+    frame = analyze_circuits(prices, config)
+    if frame.empty:
+        return frame
     frame["volume_average"] = frame["volume"].shift(1).rolling(
         config.volume_window, min_periods=config.volume_window
     ).mean()
@@ -67,7 +76,6 @@ def analyze_prices(prices, config=SignalConfig(), market_dates=None):
             config.volume_window, min_periods=config.volume_window
         ).max()
     )
-    frame["change_pct"] = ((frame["close"] - reference) / reference) * 100
     if market_dates is None:
         calendar = pd.bdate_range(frame["date"].min(), frame["date"].max())
     else:

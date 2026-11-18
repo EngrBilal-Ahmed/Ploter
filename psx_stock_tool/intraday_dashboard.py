@@ -9,6 +9,7 @@ from .config import AppConfig, PRICE_GRAPH_OPTIONS
 from .data import get_stock_data, load_stock_list, save_stock_list
 from .gui import DEFAULT_STOCKS, parse_stock_symbols
 from .intraday import intraday_chart_options, load_intraday_history, session_rows
+from .surveillance import SignalConfig
 
 
 def _columns(names):
@@ -22,7 +23,8 @@ async def build_intraday_dashboard(database_file):
     saved = await run.io_bound(load_stock_list, database_file)
     stocks = parse_stock_symbols(saved if saved is not None else DEFAULT_STOCKS)
     stock_text = ", ".join(stocks)
-    active = {"frames": {}, "busy": False}
+    circuit_defaults = SignalConfig()
+    active = {"frames": {}, "busy": False, "circuit_config": circuit_defaults}
     ui.colors(primary="#2563eb", secondary="#0f766e", accent="#f97316")
     ui.add_head_html(
         "<style>body{background:#f1f5f9}"
@@ -36,7 +38,7 @@ async def build_intraday_dashboard(database_file):
             ui.icon("query_stats", size="36px").classes("text-primary")
             ui.label("PSX Intraday Range Dashboard").classes("text-3xl font-bold text-slate-800")
         ui.label(
-            "The original OHLC lines and daily high/low range, with aligned volume. "
+            "Switch between the original OHLC lines and circuit candlesticks, with daily range and aligned volume. "
             "Daily candles are not live ticks or minute-by-minute trades."
         ).classes("text-slate-600")
         ui.label(f"Shared SQLite cache: {database_file}").classes("text-xs text-slate-500")
@@ -60,6 +62,11 @@ async def build_intraday_dashboard(database_file):
                     "Refresh recent days", value=5, min=0, step=1, format="%.0f",
                 ).classes("w-48")
                 with ui.column().classes("gap-1"):
+                    ui.label("Price chart").classes("text-sm text-slate-600")
+                    price_view = ui.radio(
+                        {"line": "Line graph", "candlestick": "OHLC candlesticks"}, value="line",
+                    ).props("inline")
+                with ui.column().classes("gap-1") as line_settings:
                     ui.label("Price lines").classes("text-sm text-slate-600")
                     with ui.row().classes("gap-2"):
                         price_lines = {
@@ -74,6 +81,27 @@ async def build_intraday_dashboard(database_file):
                 "Fetch uses Numpy.py's missing-history and recent-refresh workflow through today. "
                 "No automatic API requests."
             ).classes("text-sm text-slate-500")
+
+        with ui.expansion(
+            "Candlestick circuit settings and limitations", icon="tune",
+        ).classes("w-full bg-white rounded") as circuit_settings:
+            with ui.row().classes("items-end gap-4"):
+                limit_pct = ui.number(
+                    "Circuit (%)", value=circuit_defaults.limit_pct, min=0.1, max=99, step=0.5,
+                )
+                min_move = ui.number(
+                    "Minimum move (Rs)", value=circuit_defaults.min_move, min=0.01, step=0.01,
+                )
+                apply_circuits = ui.button("Apply circuit settings", icon="tune")
+            ui.label(
+                "Same indicative rules as PumpDashboard: LDCP +/- max(minimum move, LDCP x circuit %), "
+                "within Rs 0.02. Dashed lines are upper/lower estimates; orange/purple circles mark "
+                "upper/lower touches. Missing/nonpositive LDCP falls back to the preceding cached close; "
+                "without a usable reference no limit is inferred. The selected rule applies to all displayed "
+                "history, not historical PSX rule changes or special scrip rules. Corporate actions may "
+                "distort estimates. Daily candles cannot confirm an order-book lock or trade sequence."
+            ).classes("text-sm text-amber-800")
+        circuit_settings.set_visibility(False)
 
         status = ui.label("Loading cached history...").classes("text-slate-700")
         errors = ui.textarea("Fetch errors / empty responses").props("readonly").classes("w-full")
@@ -112,7 +140,8 @@ async def build_intraday_dashboard(database_file):
 
     controls = [
         stock_input, apply_stocks, selected, history_days, refresh_days,
-        cached_button, fetch_button, selection, *price_lines.values(),
+        cached_button, fetch_button, selection, price_view, limit_pct, min_move,
+        apply_circuits, *price_lines.values(),
     ]
 
     def set_busy(busy):
@@ -142,11 +171,16 @@ async def build_intraday_dashboard(database_file):
             raise ValueError("History must be a whole number of at least 1.")
         if not refresh.is_integer() or refresh < 0:
             raise ValueError("Refresh days must be a whole number of at least 0.")
-        return AppConfig(
+        config = AppConfig(
             stock_names=symbols, total_days=int(history), refresh_days=int(refresh),
             price_graphs="".join(key for key, checkbox in price_lines.items() if checkbox.value),
             database_file=database_file,
         )
+        circuit_config = (
+            SignalConfig(limit_pct=float(limit_pct.value), min_move=float(min_move.value))
+            if price_view.value == "candlestick" else active["circuit_config"]
+        )
+        return config, circuit_config
 
     def rounded_rows(rows):
         return [
@@ -154,10 +188,16 @@ async def build_intraday_dashboard(database_file):
             for row in rows
         ]
 
-    def show_symbol():
+    def show_symbol(*, preserve_zoom=False):
         symbol = selection.value
         frame = active["frames"].get(symbol)
+        previous_zoom = chart.options.get("dataZoom", [])
+        zoom_values = {
+            key: previous_zoom[0][key] for key in ("start", "end")
+        } if preserve_zoom and previous_zoom else {}
         chart.options.clear()
+        line_settings.set_visibility(price_view.value == "line")
+        circuit_settings.set_visibility(price_view.value == "candlestick")
         if frame is None:
             detail.set_text("No cached history for the selected stocks. Fetch data or change the stock list.")
             sessions.rows = []
@@ -167,7 +207,9 @@ async def build_intraday_dashboard(database_file):
                 PRICE_GRAPH_OPTIONS[key]
                 for key, checkbox in price_lines.items() if checkbox.value
             ]
-            chart.options.update(intraday_chart_options(frame, graphs))
+            chart.options.update(intraday_chart_options(frame, graphs, price_view=price_view.value))
+            for zoom in chart.options["dataZoom"]:
+                zoom.update(zoom_values)
             latest = frame.iloc[-1]
             detail.set_text(
                 f"{symbol} | {frame.iloc[0]['date']:%Y-%m-%d} to {latest['date']:%Y-%m-%d} | "
@@ -179,11 +221,12 @@ async def build_intraday_dashboard(database_file):
         sessions.update()
         watch.update()
 
-    async def read_cache(config):
+    async def read_cache(config, circuit_config):
         frames = await run.io_bound(
-            load_intraday_history, database_file, config.stock_names, config.total_days,
+            load_intraday_history, database_file, config.stock_names, config.total_days, circuit_config,
         )
         active["frames"] = frames
+        active["circuit_config"] = circuit_config
         rows = []
         for symbol, frame in frames.items():
             latest = session_rows(frame.tail(1))[0]
@@ -223,14 +266,14 @@ async def build_intraday_dashboard(database_file):
         if active["busy"]:
             return
         try:
-            config = read_config()
+            config, circuit_config = read_config()
         except (TypeError, ValueError) as error:
             ui.notify(str(error), type="negative")
             return
         set_busy(True)
         status.set_text("Reading SQLite; no API requests...")
         try:
-            status.set_text(await read_cache(config))
+            status.set_text(await read_cache(config, circuit_config))
         except Exception as error:
             clear_view()
             status.set_text(f"Could not load cached history: {error}")
@@ -242,7 +285,7 @@ async def build_intraday_dashboard(database_file):
         if active["busy"]:
             return
         try:
-            config = read_config()
+            config, circuit_config = read_config()
         except (TypeError, ValueError) as error:
             ui.notify(str(error), type="negative")
             return
@@ -264,7 +307,7 @@ async def build_intraday_dashboard(database_file):
                 errors.set_value("\n".join(failures))
                 errors.set_visibility(True)
                 ui.notify("Some data could not be fetched; see errors and cached session dates.", type="warning")
-            message = await read_cache(config)
+            message = await read_cache(config, circuit_config)
             status.set_text(
                 (f"Fetch finished with {len(failures)} error(s) / empty result(s). "
                  if failures else "Fetch finished. ") + message
@@ -285,7 +328,7 @@ async def build_intraday_dashboard(database_file):
             await run.io_bound(save_stock_list, stock_input.value or "", database_file)
             selected.set_options(symbols, value=symbols.copy())
             if symbols:
-                status.set_text(await read_cache(read_config()))
+                status.set_text(await read_cache(*read_config()))
             else:
                 clear_view()
                 status.set_text("Enter at least one stock symbol and apply the stock list.")
@@ -299,6 +342,14 @@ async def build_intraday_dashboard(database_file):
     stock_input.on_value_change(flatten_stock_list)
     stock_input.on("blur", normalize_stock_list)
     selection.on_value_change(show_symbol)
+    price_view.on_value_change(lambda: show_symbol(preserve_zoom=True))
+
+    def remember_zoom(event):
+        payload = (event.args.get("batch") or [event.args])[0]
+        for zoom in chart.options.get("dataZoom", []):
+            zoom.update({key: payload[key] for key in ("start", "end") if key in payload})
+
+    chart.on("chart:datazoom", remember_zoom, args=["start", "end", "batch"])
     watch.on(
         "selection",
         lambda event: selection.set_value(event.args["rows"][0]["symbol"])
@@ -312,6 +363,7 @@ async def build_intraday_dashboard(database_file):
     apply_stocks.on_click(apply_stock_list)
     cached_button.on_click(load_selected)
     fetch_button.on_click(fetch_selected)
+    apply_circuits.on_click(load_selected)
     if stocks:
         await load_selected()
     else:

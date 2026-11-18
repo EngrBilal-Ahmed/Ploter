@@ -6,6 +6,7 @@ from queue import Empty, SimpleQueue
 from nicegui import run, ui
 import pandas as pd
 
+from .charting import circuit_price_series
 from .dashboard_sync import sync_eligible_prices
 from .surveillance import SignalConfig, load_dashboard_overview, load_symbol_analysis
 
@@ -24,28 +25,10 @@ def chart_options(frame):
         "yAxis": {"type": "value", "scale": True},
         "dataZoom": [{"type": "inside"}, {"type": "slider"}],
     }
+    price_series = circuit_price_series(frame)
     prices = {
-        **common, "legend": {"data": ["OHLC", "Upper estimate", "Lower estimate", "Upper touch", "Lower touch"]},
-        "series": [
-            {"name": "OHLC", "type": "candlestick",
-             "data": frame[["open", "close", "low", "high"]].values.tolist(),
-             "itemStyle": {"color": "#16a34a", "color0": "#dc2626",
-                           "borderColor": "#16a34a", "borderColor0": "#dc2626"}},
-            {"name": "Upper estimate", "type": "line", "data": values("upper_limit"),
-             "showSymbol": False, "lineStyle": {"type": "dashed", "opacity": 0.5}},
-            {"name": "Lower estimate", "type": "line", "data": values("lower_limit"),
-             "showSymbol": False, "lineStyle": {"type": "dashed", "opacity": 0.5}},
-            *[
-                {"name": label, "type": "scatter", "symbolSize": 10,
-                 "itemStyle": {"color": color},
-                 "data": [[day, float(row[price])] for day, (_, row) in zip(days, frame.iterrows())
-                          if row[flag]]}
-                for label, color, price, flag in (
-                    ("Upper touch", "#f59e0b", "high", "upper_touch"),
-                    ("Lower touch", "#7c3aed", "low", "lower_touch"),
-                )
-            ],
-        ],
+        **common, "legend": {"data": [series["name"] for series in price_series]},
+        "series": price_series,
     }
     volume = {
         **common, "legend": {"data": ["Volume", "Prior-session average"]},

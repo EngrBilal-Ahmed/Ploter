@@ -252,8 +252,24 @@ sorted **Stock to chart** dropdown to view that stock's history and daily-sessio
 details. The dashboard uses the available browser width with small responsive
 edge spacing, including on 1920 x 1080 displays and half-screen windows.
 
-The price panel preserves selectable Open/High/Low/Close lines and minimum/maximum
-annotations. The range histogram uses the original formula
+Use the **Price chart** radio buttons to switch between **Line graph** (the
+default, preserving selectable Open/High/Low/Close lines and minimum/maximum
+annotations) and **OHLC candlesticks**. Candlestick mode reuses PumpDashboard's
+green/red candles, dashed upper/lower circuit estimates, and orange upper-touch
+and purple lower-touch circles, with the same legend and axis tooltips.
+Switching modes does not fetch data and retains the linked zoom and line choices.
+
+In candlestick mode, expand **Candlestick circuit settings and limitations** to
+change **Circuit (%)** and **Minimum move (Rs)**, then click **Apply circuit
+settings** to recalculate cached charts. Defaults match PumpDashboard:
+`LDCP +/- max(Rs 1, LDCP * 10%)`, rounded to paisa, with Rs 0.02 touch tolerance.
+Missing/nonpositive LDCP falls back to the preceding cached close, including the
+session immediately before the displayed window; no valid reference means no
+estimate. These are indicative limits applied uniformly to the displayed history,
+not exchange-verified caps or historical PSX rule changes. Daily candles cannot
+confirm an order-book lock, and corporate actions may distort comparisons.
+
+The range histogram remains available in both modes and uses the original formula
 `(High - Low) / Low * 100`, with percentage labels; a zero low produces no
 percentage. The third panel shows daily volume (green for close >= open, red
 otherwise); missing volume remains blank.

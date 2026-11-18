@@ -20,6 +20,7 @@ from psx_stock_tool.ingestion import cache_api_prices
 from psx_stock_tool.intraday import (
     intraday_chart_options, load_intraday_history, session_rows,
 )
+from psx_stock_tool.surveillance import SignalConfig, analyze_prices
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -81,6 +82,7 @@ class IntradayDataTests(unittest.TestCase):
             self.assertEqual(options["grid"][index]["left"], 80)
             self.assertEqual(options["grid"][index]["right"], 40)
         self.assertEqual(options["axisPointer"]["link"], [{"xAxisIndex": "all"}])
+        self.assertTrue(options["tooltip"]["confine"])
         self.assertEqual([zoom["type"] for zoom in options["dataZoom"]], ["inside", "slider"])
         for zoom in options["dataZoom"]:
             self.assertEqual(zoom["xAxisIndex"], [0, 1, 2])
@@ -101,6 +103,74 @@ class IntradayDataTests(unittest.TestCase):
             ["Intraday range (%)", "Volume"],
         )
 
+    def test_candles_and_every_circuit_overlay_match_pump_dashboard(self):
+        from psx_stock_tool.dashboard import chart_options
+
+        frame = prices()
+        frame["ldcp"] = 10.0
+        frame["high"] = [11.0, 10.5, 11.0]
+        frame["low"] = [9.5, 9.0, 10.0]
+        frame["open"] = 10.0
+        frame["close"] = [10.5, 9.0, 11.0]
+        frame = calculate_intraday_ranges(analyze_prices(frame))
+        options = intraday_chart_options(frame, [], price_view="candlestick")
+        json.dumps(options, allow_nan=False)
+        pump_prices = chart_options(frame)[0]
+        self.assertEqual(options["legend"]["data"], pump_prices["legend"]["data"])
+        for actual, expected in zip(options["series"][:5], pump_prices["series"]):
+            self.assertEqual(actual["xAxisIndex"], 0)
+            self.assertEqual(actual["yAxisIndex"], 0)
+            self.assertEqual(
+                {key: value for key, value in actual.items()
+                 if key not in ("xAxisIndex", "yAxisIndex")},
+                expected,
+            )
+        candles, upper, lower, upper_touch, lower_touch = options["series"][:5]
+        self.assertEqual(candles["data"][0], [10, 10.5, 9.5, 11])
+        self.assertEqual(candles["itemStyle"]["color"], "#16a34a")
+        self.assertEqual(candles["itemStyle"]["color0"], "#dc2626")
+        self.assertEqual(upper["lineStyle"]["type"], "dashed")
+        self.assertEqual(lower["lineStyle"]["type"], "dashed")
+        self.assertEqual(upper_touch["data"], [["2025-01-02", 11], ["2025-01-06", 11]])
+        self.assertEqual(lower_touch["data"], [["2025-01-03", 9]])
+        self.assertEqual((upper_touch["symbol"], lower_touch["symbol"]), ("circle", "circle"))
+        self.assertEqual(upper_touch["itemStyle"]["color"], "#f59e0b")
+        self.assertEqual(lower_touch["itemStyle"]["color"], "#7c3aed")
+        for zoom in options["dataZoom"]:
+            self.assertEqual(zoom["xAxisIndex"], [0, 1, 2])
+        self.assertEqual([item["name"] for item in options["series"][5:]],
+                         ["Intraday range (%)", "Volume"])
+        with self.assertRaisesRegex(ValueError, "Price view"):
+            intraday_chart_options(frame, [], price_view="unknown")
+
+    def test_circuit_reference_uses_preceding_hidden_session_and_custom_rules(self):
+        with closing(sqlite3.connect(self.database)) as connection, connection:
+            connection.execute(
+                "UPDATE stock_prices SET ldcp = NULL WHERE symbol = 'ABC' AND date = '2025-01-06'"
+            )
+        full = load_intraday_history(self.database, ["ABC"], 120)["ABC"]
+        shown = load_intraday_history(self.database, ["ABC"], 1)["ABC"]
+        self.assertEqual(len(shown), 1)
+        self.assertEqual(shown.iloc[0]["date"], pd.Timestamp("2025-01-06"))
+        self.assertEqual(shown.iloc[0]["upper_limit"], full.iloc[-1]["upper_limit"])
+        self.assertEqual(shown.iloc[0]["lower_limit"], full.iloc[-1]["lower_limit"])
+        self.assertEqual(shown.iloc[0]["upper_limit"], 11)
+        self.assertTrue(pd.isna(full.iloc[0]["upper_limit"]))
+        options = intraday_chart_options(full, [], price_view="candlestick")
+        self.assertIsNone(options["series"][1]["data"][0])
+        json.dumps(options, allow_nan=False)
+        custom = load_intraday_history(
+            self.database, ["ABC"], 1, SignalConfig(limit_pct=20, min_move=2),
+        )["ABC"]
+        self.assertEqual(custom.iloc[0]["upper_limit"], 12)
+        self.assertEqual(custom.iloc[0]["lower_limit"], 8)
+        with closing(sqlite3.connect(self.database)) as connection, connection:
+            connection.execute(
+                "UPDATE stock_prices SET ldcp = 100 WHERE symbol = 'ABC' AND date = '2025-01-06'"
+            )
+        supplied = load_intraday_history(self.database, ["ABC"], 1)["ABC"]
+        self.assertEqual(supplied.iloc[0]["upper_limit"], 110)
+
     def test_strict_fetch_raises_and_default_keeps_legacy_cache_fallback(self):
         today = date.today()
         with closing(sqlite3.connect(self.database)) as connection, connection:
@@ -115,7 +185,7 @@ class IntradayDataTests(unittest.TestCase):
 
     def test_independent_launcher_help(self):
         result = subprocess.run(
-            [sys.executable, str(ROOT / "NumpyDashboard.py"), "--help"],
+            [sys.executable, str(ROOT / "IntradayDashboard.py"), "--help"],
             cwd=self.directory.name, capture_output=True, text=True,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -205,6 +275,29 @@ class IntradayInteractionTests(unittest.IsolatedAsyncioTestCase):
                     [series["name"] for series in chart.options["series"]],
                     ["High", "Low", "Intraday range (%)", "Volume"],
                 )
+                original_bars = chart.options["series"][-2:]
+                with patch("psx_stock_tool.intraday_dashboard.load_intraday_history") as load:
+                    user.find("OHLC candlesticks").click()
+                    self.assertEqual(chart.options["series"][0]["type"], "candlestick")
+                    self.assertEqual(chart.options["series"][0]["data"][0], [10, 11, 10, 12])
+                    self.assertEqual(
+                        [item["name"] for item in chart.options["series"][:5]],
+                        ["OHLC", "Upper estimate", "Lower estimate", "Upper touch", "Lower touch"],
+                    )
+                    self.assertEqual(chart.options["series"][-2:], original_bars)
+                    user.find(ui.echart).trigger(
+                        "chart:datazoom", {"batch": [{"start": 25, "end": 75}]},
+                    )
+                    user.find("Line graph").click()
+                    load.assert_not_called()
+                self.assertEqual(
+                    [series["name"] for series in chart.options["series"]],
+                    ["High", "Low", "Intraday range (%)", "Volume"],
+                )
+                self.assertTrue(all(
+                    (zoom["start"], zoom["end"]) == (25, 75)
+                    for zoom in chart.options["dataZoom"]
+                ))
                 user.find("Stock to chart").trigger(
                     "update:modelValue", {"value": 1, "label": "DEF"},
                 )
@@ -228,6 +321,55 @@ class IntradayInteractionTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(chart.options, {})
                 self.assertEqual(load_stock_list(database), "MISSING")
                 self.assertTrue(all(not table.rows for table in user.find(ui.table).elements))
+
+    async def test_circuit_settings_recalculate_cached_candles_without_fetching(self):
+        from nicegui import ui
+        from nicegui.testing import user_simulation
+        from psx_stock_tool.intraday_dashboard import build_intraday_dashboard
+
+        with TemporaryDirectory() as directory:
+            database = str(Path(directory) / "prices.db")
+            save_stock_list("ABC", database)
+            with closing(sqlite3.connect(database)) as connection, connection:
+                cache_api_prices(
+                    connection, prices(), "ABC", date(2025, 1, 1), date(2025, 1, 31),
+                )
+
+            async def page():
+                await build_intraday_dashboard(database)
+
+            async with user_simulation() as user:
+                ui.page("/")(page)
+                await user.open("/")
+                await user.should_see("Loaded cached history for 1 stock(s).", retries=100)
+                user.find("OHLC candlesticks").click()
+                settings = next(iter(
+                    user.find("Candlestick circuit settings and limitations").elements
+                ))
+                self.assertTrue(settings.visible)
+                user.find("Candlestick circuit settings and limitations").click()
+                user.find("Circuit (%)").clear().type("20")
+                user.find("Minimum move (Rs)").clear().type("2")
+                user.find("History (calendar days)").clear().type("1")
+                with patch("psx_stock_tool.data.psxdata.stocks") as fetch:
+                    user.find("Apply circuit settings").click()
+                    await user.should_see("ABC | 2025-01-06 to 2025-01-06", retries=100)
+                    fetch.assert_not_called()
+                chart = next(iter(user.find(ui.echart).elements))
+                self.assertEqual(chart.options["series"][0]["type"], "candlestick")
+                self.assertEqual(chart.options["series"][1]["data"], [12])
+                self.assertEqual(chart.options["series"][2]["data"], [8])
+                user.find("Circuit (%)").clear().type("0")
+                user.find("Apply circuit settings").click()
+                await user.should_see("Invalid circuit or volume settings", retries=100)
+                self.assertEqual(chart.options["series"][1]["data"], [12])
+                user.find("Line graph").click()
+                self.assertFalse(settings.visible)
+                self.assertEqual(chart.options["series"][0]["name"], "High")
+                user.find("History (calendar days)").clear().type("120")
+                user.find("Show cached charts").click()
+                await user.should_see("ABC | 2025-01-02 to 2025-01-06", retries=100)
+                self.assertEqual(len(chart.options["series"][0]["data"]), 3)
 
     async def test_fetch_reports_failures_keeps_cache_and_processes_other_stocks(self):
         from nicegui import ui
