@@ -82,17 +82,17 @@ async def build_dashboard(database_file, eligible_file):
     active = {"config": SignalConfig(), "overview": None, "generation": 0}
     messages = SimpleQueue()
 
-    with ui.column().classes("w-full max-w-screen-2xl mx-auto p-5 gap-4"):
-        ui.label("PSX Circuit & Volume Watch").classes("text-3xl font-bold text-slate-800")
-        ui.label(
-            "Research signals, not proof of manipulation or predictions. Daily candles cannot "
-            "confirm an order-book lock or the intraday sequence of a circuit break."
-        ).classes("text-amber-800")
-        ui.label(f"Eligibility: {eligible_file} | Cache: {database_file}").classes("text-xs text-slate-500")
+    with ui.column().classes("w-full max-w-[1866px] mx-auto p-3 gap-2"):
+        # ui.label("My Dashboard").classes("text-3xl font-bold text-slate-800")
+        # ui.label(
+        #     "Research signals, not proof of manipulation or predictions. Daily candles cannot "
+        #     "confirm an order-book lock or the intraday sequence of a circuit break."
+        # ).classes("text-amber-800")
+        # ui.label(f"Eligibility: {eligible_file} | Cache: {database_file}").classes("text-xs text-slate-500")
         with ui.card().classes("w-full"):
             ui.label("Data synchronization").classes("text-lg font-semibold")
             with ui.row().classes("items-end gap-4"):
-                history_start = ui.input("Earliest history date", value="2017-01-01").props("type=date")
+                history_start = ui.input("Earliest history date", value="2024-01-01").props("type=date")
                 refresh_days = ui.number("Refresh past X calendar days", value=0, min=0, step=1, format="%.0f")
                 fetch_button = ui.button("Fetch all missing dates", icon="sync")
                 reload_button = ui.button("Reload analysis", icon="refresh").props("outline")
@@ -127,12 +127,13 @@ async def build_dashboard(database_file, eligible_file):
         watch = ui.table(
             columns=_columns([
                 ("symbol", "Symbol"), ("name", "Company"), ("date", "Last candle"),
-                ("stale", "Behind market data"), ("signal", "Latest evidence"), ("close", "Close"),
+                ("stale", "Behind"), ("signal", "Latest evidence"), ("close", "Close"),
                 ("change_pct", "Change %"), ("volume_ratio", "Volume x avg"),
                 ("upper_streak", "Upper run now"), ("max_upper_run", "Max upper run"),
                 ("max_lower_run", "Max lower run"), ("upper_closes", "Upper closes"),
                 ("lower_closes", "Lower closes"), ("sessions", "Stored sessions"),
-            ]), rows=[], row_key="symbol", selection="single", pagination=15,
+            ]
+            ), rows=[], row_key="symbol", selection="single", pagination=5,
         ).classes("w-full")
         ui.label("Select a row or choose a symbol below. Blank volume ratios mean insufficient/zero baseline.")
         with ui.row().classes("items-end"):
@@ -180,7 +181,7 @@ async def build_dashboard(database_file, eligible_file):
             {key: round(value, 3) if isinstance(value, float) else value for key, value in row.items()}
             for row in overview["rows"]
             if (not signals_only.value or row["priority"] > 0)
-            and (query in row["symbol"] or query in row["name"].upper())
+               and (query in row["symbol"] or query in row["name"].upper())
         ]
         watch.update()
 
@@ -220,7 +221,7 @@ async def build_dashboard(database_file, eligible_file):
             flagged = shown.loc[
                 shown["upper_touch"] | shown["lower_touch"] | shown["volume_spike"]
                 | shown["priority"].gt(0)
-            ].tail(200).sort_values("date", ascending=False).copy()
+                ].tail(200).sort_values("date", ascending=False).copy()
             flagged["date"] = flagged["date"].dt.strftime("%Y-%m-%d")
             flagged = flagged[["date", "signal", "close", "volume_ratio", "upper_streak",
                                "lower_streak", "upper_retreat", "lower_rebound"]]
@@ -306,7 +307,7 @@ async def build_dashboard(database_file, eligible_file):
     search.on_value_change(update_watch)
     signals_only.on_value_change(update_watch)
     watch.on("selection", lambda event: selection.set_value(event.args["rows"][0]["symbol"])
-             if event.args.get("rows") and event.args.get("added") else None)
+    if event.args.get("rows") and event.args.get("added") else None)
     selection.on_value_change(show_symbol)
     chart_button.on_click(show_symbol)
     reload_button.on_click(reload_analysis)
