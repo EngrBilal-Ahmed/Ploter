@@ -131,7 +131,7 @@ async def build_dashboard(database_file, eligible_file):
                 ("change_pct", "Change %"), ("volume_ratio", "Volume x avg"),
                 ("upper_streak", "Upper run now"), ("max_upper_run", "Max upper run"),
                 ("max_lower_run", "Max lower run"), ("upper_closes", "Upper closes"),
-                ("lower_closes", "Lower closes"), ("sessions", "Stored sessions"),
+                ("lower_closes", "Lower closes"), ("sessions", "# Sessions"),
             ]
             ), rows=[], row_key="symbol", selection="single", pagination=5,
         ).classes("w-full")
@@ -141,7 +141,7 @@ async def build_dashboard(database_file, eligible_file):
             chart_days = ui.number("Chart calendar days", value=365, min=1, step=1, format="%.0f")
             chart_button = ui.button("Show history")
         detail = ui.label("No stock selected.").classes("text-lg font-semibold")
-        price_chart = ui.echart({}).classes("w-full h-96")
+        price_chart = ui.echart({}).classes("w-full h-150")
         ui.label("Volume histogram (orange = elevated versus preceding-session baseline)")
         volume_chart = ui.echart({}).classes("w-full h-64")
         ui.label("Monthly circuit-close and touch/retreat counts")
@@ -280,7 +280,15 @@ async def build_dashboard(database_file, eligible_file):
     async def fetch_missing():
         set_busy(True)
         errors.set_visibility(False)
+
+        # Red while loading/error
         status.set_text("Synchronizing eligible stocks; this may take time on the first run.")
+        status.classes(replace='text-red-600 font-medium')
+
+        # Later, switch to green when finished
+        status.set_text("Synchronization complete.")
+        status.classes(replace='text-green-600 font-medium')
+
         try:
             refresh = _whole_number(refresh_days.value, "Refresh days", 0)
             result = await run.io_bound(

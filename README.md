@@ -150,7 +150,7 @@ it need not proceed with stale data:
 ```python
 from src.sync_psxdata import sync_psxdata
 
-summary = sync_psxdata(database_file="stock_data.db")
+summary = sync_psxdata(database_file="data/stock_data.db")
 print(summary)
 # Run your detector against stock_prices after synchronization succeeds.
 ```

@@ -1,4 +1,4 @@
-"""Explainable daily-candle screening, not a prediction of market manipulation."""
+l"""Explainable daily-candle screening, not a prediction of market manipulation."""
 
 from contextlib import closing
 from dataclasses import dataclass
