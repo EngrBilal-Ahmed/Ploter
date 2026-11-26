@@ -121,11 +121,22 @@ async def build_dashboard(database_file, eligible_file):
             ).classes("text-sm text-slate-600")
         stats = ui.label("").classes("text-base font-semibold")
         missing = ui.label("").classes("text-sm text-slate-600")
+        ranking_info = ui.label("").classes("text-sm text-slate-600")
+        ui.label(
+            "Rank 1 = highest estimated chance of an upper-circuit CLOSE next trading session, "
+            "not an actual order-book lock or a guarantee. Blank chances sort last; their ranks "
+            "are display positions only. Uses the selected indicative circuit rule, not official "
+            "historical rules. Today's/future candles are excluded. Check the last candle date: "
+            "the newest cached session can itself be outdated. Estimates are conditional on an "
+            "evaluable traded next-session candle. Search/filter retains global ranks."
+        ).classes("text-sm text-amber-800")
         with ui.row().classes("w-full items-center gap-4"):
             search = ui.input("Search symbol or company").classes("w-80")
             signals_only = ui.switch("Signals only", value=False)
         watch = ui.table(
             columns=_columns([
+                ("rank", "Rank"), ("upper_probability_pct", "Next upper close %"),
+                ("ranking_status", "Prediction status"),
                 ("symbol", "Symbol"), ("name", "Company"), ("date", "Last candle"),
                 ("stale", "Behind"), ("signal", "Latest evidence"), ("close", "Close"),
                 ("change_pct", "Change %"), ("volume_ratio", "Volume x avg"),
@@ -141,7 +152,7 @@ async def build_dashboard(database_file, eligible_file):
             chart_days = ui.number("Chart calendar days", value=365, min=1, step=1, format="%.0f")
             chart_button = ui.button("Show history")
         detail = ui.label("No stock selected.").classes("text-lg font-semibold")
-        price_chart = ui.echart({}).classes("w-full h-150")
+        price_chart = ui.echart({}).classes("w-full h-80")
         ui.label("Volume histogram (orange = elevated versus preceding-session baseline)")
         volume_chart = ui.echart({}).classes("w-full h-64")
         ui.label("Monthly circuit-close and touch/retreat counts")
@@ -150,7 +161,7 @@ async def build_dashboard(database_file, eligible_file):
         events = ui.table(
             columns=_columns([
                 ("date", "Date"), ("signal", "Evidence"), ("close", "Close"),
-                ("volume_ratio", "Volume x avg"), ("upper_streak", "Upper run"),
+                ("volume_ratio", "V x avg"), ("upper_streak", "Upper run"),
                 ("lower_streak", "Lower run"), ("upper_retreat", "Upper touch / close away"),
                 ("lower_rebound", "Lower touch / close away"),
             ]), rows=[], row_key="date", pagination=10,
@@ -255,6 +266,28 @@ async def build_dashboard(database_file, eligible_file):
                 + ", ".join(overview["missing"][:25])
                 + (" ..." if len(overview["missing"]) > 25 else "")
             )
+            prediction = overview["prediction"]
+            ranking_text = prediction["message"]
+            if prediction["state"] != "unavailable":
+                hit_rate = (
+                    f"{prediction['top_10_hit_pct']:.1f}%"
+                    if prediction["top_10_hit_pct"] is not None else "unavailable"
+                )
+                ranking_text += (
+                    f" As of {prediction['as_of']} | {prediction['ranked_candidates']} candidates | "
+                    f"Train: {prediction['training_rows']:,} rows, outcomes through "
+                    f"{prediction['training_end']} | Calibration: {prediction['calibration_rows']:,} "
+                    f"rows, outcomes through {prediction['calibration_end']} | "
+                    f"Holdout: {prediction['validation_start']} to {prediction['validation_end']}, "
+                    f"{prediction['validation_rows']:,} rows / {prediction['validation_sessions']} sessions | "
+                    f"Top-10 evaluable hit rate: {hit_rate} vs "
+                    f"evaluable universe {prediction['base_rate_pct']:.1f}% | "
+                    f"Pick coverage: {prediction['top_10_evaluable']}/{prediction['top_10_picks']} "
+                    f"({prediction['top_10_coverage_pct']:.1f}%) | "
+                    f"Brier: {prediction['brier']:.4f} vs constant baseline "
+                    f"{prediction['baseline_brier']:.4f} (lower is better)."
+                )
+            ranking_info.set_text(ranking_text)
             selection.options = {row["symbol"]: f"{row['symbol']} - {row['name']}" for row in overview["rows"]}
             if selection.value not in selection.options:
                 selection.set_value(next(iter(selection.options), None))
@@ -271,6 +304,7 @@ async def build_dashboard(database_file, eligible_file):
             selection.update()
             stats.set_text("Analysis unavailable")
             missing.set_text("")
+            ranking_info.set_text("Probability ranking unavailable.")
             clear_details("Reload valid eligible history and settings to view charts.")
             status.set_text(f"Analysis failed: {error}")
             ui.notify(str(error), type="negative")

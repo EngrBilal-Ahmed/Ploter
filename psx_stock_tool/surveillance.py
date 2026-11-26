@@ -1,4 +1,4 @@
-l"""Explainable daily-candle screening, not a prediction of market manipulation."""
+"""Explainable daily-candle screening, not a prediction of market manipulation."""
 
 from contextlib import closing
 from dataclasses import dataclass
@@ -9,6 +9,7 @@ import pandas as pd
 
 from .database import initialize_database
 from .eligibility import DEFAULT_ELIGIBLE_FILE, load_eligible_stocks, register_eligible_stocks
+from .upper_prediction import apply_upper_ranking, prediction_samples
 
 
 @dataclass(frozen=True)
@@ -115,17 +116,21 @@ def _read_prices(connection, symbol):
 def load_dashboard_overview(database_file, eligible_file=DEFAULT_ELIGIBLE_FILE, config=SignalConfig()):
     stocks = load_eligible_stocks(eligible_file)
     rows = []
+    samples = []
     with closing(sqlite3.connect(database_file, timeout=30)) as connection:
         initialize_database(connection)
         register_eligible_stocks(connection, stocks)
         market_dates = [row[0] for row in connection.execute(
             "SELECT DISTINCT date FROM stock_prices JOIN eligible_symbols USING (symbol) ORDER BY date"
         )]
+        prediction_start = pd.Timestamp(market_dates[-504:][0]) if market_dates else None
         available = {row[0] for row in connection.execute(
             "SELECT DISTINCT symbol FROM stock_prices JOIN eligible_symbols USING (symbol)"
         )}
         for symbol in sorted(available):
             frame = analyze_prices(_read_prices(connection, symbol), config, market_dates)
+            symbol_samples = prediction_samples(frame, symbol, market_dates, config)
+            samples.append(symbol_samples.loc[symbol_samples["date"].ge(prediction_start)])
             latest = frame.iloc[-1]
             row = {
                 "symbol": symbol, "name": stocks[symbol], "date": latest["date"].strftime("%Y-%m-%d"),
@@ -142,13 +147,13 @@ def load_dashboard_overview(database_file, eligible_file=DEFAULT_ELIGIBLE_FILE, 
                 "stale": latest["date"].strftime("%Y-%m-%d") < market_dates[-1],
             }
             rows.append(row)
-    rows.sort(key=lambda row: (row["stale"], -row["priority"], -(
-        row["volume_ratio"] if pd.notna(row["volume_ratio"]) else -1
-    ), row["symbol"]))
+    prediction = apply_upper_ranking(
+        rows, pd.concat(samples, ignore_index=True) if samples else pd.DataFrame(), market_dates
+    )
     clean_rows = pd.DataFrame(rows).astype(object)
     rows = clean_rows.where(pd.notna(clean_rows), None).to_dict("records")
     return {"stocks": stocks, "rows": rows, "latest": market_dates[-1] if market_dates else None,
-            "missing": sorted(set(stocks) - available)}
+            "missing": sorted(set(stocks) - available), "prediction": prediction}
 
 
 def load_symbol_analysis(database_file, symbol, eligible_file=DEFAULT_ELIGIBLE_FILE, config=SignalConfig()):

@@ -2,3 +2,4 @@ __pycache__/
 *.py[cod]
 data/stock_data.db
 /data/2017_2025.csv
+.idea

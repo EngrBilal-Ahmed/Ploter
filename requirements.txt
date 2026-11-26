@@ -3,3 +3,4 @@ mplcursors
 pandas
 psxdata
 nicegui
+scikit-learn>=1.3,<2

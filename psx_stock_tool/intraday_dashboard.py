@@ -37,35 +37,28 @@ async def build_intraday_dashboard(database_file):
         with ui.row().classes("items-center gap-3"):
             ui.icon("query_stats", size="36px").classes("text-primary")
             ui.label("PSX Intraday Range Dashboard").classes("text-3xl font-bold text-slate-800")
-        ui.label(
-            "Switch between the original OHLC lines and circuit candlesticks, with daily range and aligned volume. "
-            "Daily candles are not live ticks or minute-by-minute trades."
-        ).classes("text-slate-600")
-        ui.label(f"Shared SQLite cache: {database_file}").classes("text-xs text-slate-500")
+        # ui.label(
+        #     "Switch between the original OHLC lines and circuit candlesticks, with daily range and aligned volume. "
+        #     "Daily candles are not live ticks or minute-by-minute trades."
+        # ).classes("text-slate-600")
+        # ui.label(f"Shared SQLite cache: {database_file}").classes("text-xs text-slate-500")
 
         with ui.card().classes("w-full rounded-xl p-5 gap-3"):
-            ui.label("Stocks and graph settings").classes("text-lg font-semibold")
-            stock_input = ui.textarea(
-                "Stock list", value=stock_text,
-                placeholder="Paste comma-separated symbols or cells from Excel",
-            ).props("rows=1 autogrow").classes("intraday-stock-list w-full")
+            # ui.label("Stocks and graph settings").classes("text-lg font-semibold")
+            stock_input = ui.textarea("Stock list", value=stock_text,
+                                      placeholder="Paste comma-separated symbols or cells from Excel", ).props(
+                "rows=1 autogrow").classes("intraday-stock-list w-full")
             apply_stocks = ui.button("Apply stock list", icon="checklist").props("outline")
-            selected = ui.select(
-                stocks, value=stocks.copy(), multiple=True, with_input=True,
-                label="Stocks to compare",
-            ).props("use-chips").classes("w-full")
+            selected = ui.select(stocks, value=stocks.copy(), multiple=True, with_input=True,
+                                 label="Stocks to compare", ).props("use-chips").classes("w-full")
             with ui.row().classes("items-start gap-5"):
-                history_days = ui.number(
-                    "History (calendar days)", value=120, min=1, step=1, format="%.0f",
-                ).classes("w-48")
-                refresh_days = ui.number(
-                    "Refresh recent days", value=5, min=0, step=1, format="%.0f",
-                ).classes("w-48")
+                history_days = ui.number("History (calendar days)", value=120, min=1, step=1, format="%.0f", ).classes(
+                    "w-48")
+                refresh_days = ui.number("Refresh recent days", value=5, min=0, step=1, format="%.0f", ).classes("w-48")
                 with ui.column().classes("gap-1"):
                     ui.label("Price chart").classes("text-sm text-slate-600")
-                    price_view = ui.radio(
-                        {"line": "Line graph", "candlestick": "OHLC candlesticks"}, value="line",
-                    ).props("inline")
+                    price_view = ui.radio({"line": "Line", "candlestick": "Candlesticks"}, value="candlestick", ).props(
+                        "inline")
                 with ui.column().classes("gap-1") as line_settings:
                     ui.label("Price lines").classes("text-sm text-slate-600")
                     with ui.row().classes("gap-2"):
@@ -73,25 +66,20 @@ async def build_intraday_dashboard(database_file):
                             key: ui.checkbox(label, value=key in "LH")
                             for key, label in (("O", "Open"), ("H", "High"), ("L", "Low"), ("C", "Close"))
                         }
-            with ui.row().classes("gap-3"):
-                cached_button = ui.button("Show cached charts", icon="show_chart")
-                fetch_button = ui.button("Fetch / update selected", icon="sync").props("outline")
-            ui.label(
-                "Cached charts end at each stock's latest stored session, not necessarily today. "
-                "Fetch uses Numpy.py's missing-history and recent-refresh workflow through today. "
-                "No automatic API requests."
-            ).classes("text-sm text-slate-500")
+                with ui.row().classes("items-end gap-3"):
+                    cached_button = ui.button("Show cached charts", icon="show_chart")
+                    fetch_button = ui.button("Fetch / update selected", icon="sync").props("outline")
+            # ui.label(
+            #     "Cached charts end at each stock's latest stored session, not necessarily today. "
+            #     "Fetch uses Numpy.py's missing-history and recent-refresh workflow through today. "
+            #     "No automatic API requests."
+            # ).classes("text-sm text-slate-500")
 
-        with ui.expansion(
-            "Candlestick circuit settings and limitations", icon="tune",
-        ).classes("w-full bg-white rounded") as circuit_settings:
+        with ui.expansion("Candlestick circuit settings and limitations", icon="tune", ).classes(
+                "w-full bg-white rounded") as circuit_settings:
             with ui.row().classes("items-end gap-4"):
-                limit_pct = ui.number(
-                    "Circuit (%)", value=circuit_defaults.limit_pct, min=0.1, max=99, step=0.5,
-                )
-                min_move = ui.number(
-                    "Minimum move (Rs)", value=circuit_defaults.min_move, min=0.01, step=0.01,
-                )
+                limit_pct = ui.number("Circuit (%)", value=circuit_defaults.limit_pct, min=0.1, max=99, step=0.5, )
+                min_move = ui.number("Minimum move (Rs)", value=circuit_defaults.min_move, min=0.01, step=0.01, )
                 apply_circuits = ui.button("Apply circuit settings", icon="tune")
             ui.label(
                 "Same indicative rules as PumpDashboard: LDCP +/- max(minimum move, LDCP x circuit %), "
@@ -112,16 +100,15 @@ async def build_intraday_dashboard(database_file):
                 ("close", "Close (Rs.)"), ("intraday_range_percent", "Last range %"),
                 ("max_range", "Max range %"), ("average_range", "Average range %"),
                 ("volume", "Last volume"),
-            ]), rows=[], row_key="symbol", selection="single", pagination=10,
-        ).classes("w-full")
+            ]), rows=[], row_key="symbol", selection="single", pagination=10, ).classes("w-full")
         with ui.row().classes("w-full items-end gap-4"):
             selection = ui.select([], label="Stock to chart", with_input=True).classes("w-64")
             reset_zoom = ui.button("Reset linked zoom", icon="zoom_out_map").props("outline")
         detail = ui.label("No stock selected.").classes("text-lg font-semibold")
         ui.label(
             "Scroll over any panel to zoom; drag to pan, or use the bottom slider. "
-            "Price, intraday range and volume always share the same date range and hover guide."
-        ).classes("text-sm text-slate-600")
+            "Price, intraday range and volume always share the same date range and hover guide.").classes(
+            "text-sm text-slate-600")
         with ui.card().classes("w-full p-0"):
             chart = ui.echart({}).classes("w-full").style("height: 900px")
         ui.label(
@@ -249,9 +236,9 @@ async def build_intraday_dashboard(database_file):
         show_symbol()
         missing = [symbol for symbol in config.stock_names if symbol not in frames]
         return (
-            f"Loaded cached history for {len(frames)} stock(s)."
-            + (f" No stored data: {', '.join(missing)}." if missing else "")
-            + " Check the last stored session dates before trading."
+                f"Loaded cached history for {len(frames)} stock(s)."
+                + (f" No stored data: {', '.join(missing)}." if missing else "")
+                + " Check the last stored session dates before trading."
         )
 
     def clear_view():

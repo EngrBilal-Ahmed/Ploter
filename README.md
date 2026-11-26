@@ -202,7 +202,7 @@ dates cannot be distinguished from holidays without an official trading calendar
 The watchlist displays the actual last candle date, stale-relative-to-market
 flag, latest evidence, volume multiple, current streaks, and full-history maximum
 upper/lower runs. Histories current to the newest cached market session sort
-before older histories; dates remain visible and no stale signal is counted as
+before older histories when probabilities are unavailable; dates remain visible and no stale signal is counted as
 a signal for the newest session. Select a row/symbol for candlesticks with estimated limits and
 touch markers, volume bars, monthly circuit event histograms, and recent events.
 Chart range is relative to that symbol's latest stored candle, **not** a claim of
@@ -229,6 +229,62 @@ Initial screening rules are editable, explainable heuristics:
 Labels such as **Volume breakout**, **Consecutive upper closes**, and **Reversal
 after upper run** describe observed evidence. They are not validated forecasts,
 buy/sell recommendations, proof of pump-and-dump manipulation, or probabilities.
+
+### Next-session upper-close ranking
+
+The watchlist starts with **Rank**, **Next upper close %**, and **Prediction status**.
+Rank 1 has the highest estimated probability of closing at the indicative upper
+circuit on the **next trading session**, not necessarily tomorrow's calendar date.
+This is **not an actual order-book lock prediction** or a guarantee. The existing
+evidence labels remain surveillance alerts, not model probabilities.
+
+The experimental model learns from up to the most recent 504 cached eligible-market
+sessions. Features include progress toward the upper circuit, close location within
+the day's range, candle body/range, price/volume, prior-volume ratio, 5/20-session
+momentum, volatility, breakout, circuit closes/retreats, streaks, and recent upper-close
+frequency. Features never use future observations. Labels require a traded candle
+on the immediately following observed market session with a usable circuit reference;
+missing sessions, missing volumes, and candles outside the selected circuit bounds
+are not silently labelled negative. A complete, contiguous feature baseline is required.
+
+A histogram gradient-boosted classifier fits the earliest 70% of usable dates.
+Logistic sigmoid calibration uses the following 15%, and the newest 15% is an
+untouched temporal holdout. Splits apply across all symbols; outcomes crossing a
+split boundary are purged. Random train/test splits, oversampling and class
+reweighting are not used. The evaluated model is retained for current estimates,
+rather than refitting on its holdout and misrepresenting those results.
+
+The dashboard reports fit/calibration cutoffs, holdout dates/sample counts, the
+per-session top-10 picks' aggregate evaluable hit rate, the evaluable holdout
+universe event rate, and Brier loss versus a constant probability learned from
+calibration data. Historical picks are selected **before** checking availability
+of their following-session outcomes; outcome coverage is shown separately.
+Unknown outcomes are neither successes nor assumed failures. Estimated chances
+are conditional on an evaluable traded next-session candle, not unconditional
+probabilities of an executable trade. These are
+historical results, not promised future accuracy. **Weak holdout evidence** warns
+when the model does not improve Brier loss or top-10 hit rate over its baseline.
+No algorithm is claimed to be universally best; probabilities remain experimental.
+
+At least 120 usable historical dates, 1,000 training rows (30 of each outcome),
+200 calibration rows (10 of each outcome), and 200 holdout rows are required.
+Insufficient model history produces an explicit message, not a made-up score.
+Old histories, incomplete current/future candles, invalid/insufficient feature
+history, and missing/zero current traded volume get blank chances and sort last.
+All rows receive stable display positions from 1 to N; positions for blank chances
+are **not probability ranks**. Equal estimates use alphabetical symbol order.
+Search and **Signals only** retain the full-universe ranks.
+
+Reload analysis after refreshing **completed-session** data. The newest cached
+date can still be old, and observed sessions are not an official exchange calendar.
+All historical labels use the chosen circuit settings uniformly; historical rule
+changes, corporate actions, current-universe survivorship bias, trading costs,
+and unavailable execution/liquidity information limit reliability.
+Changing settings or eligible history rebuilds the model on reload.
+
+Method references: [histogram gradient boosting](https://scikit-learn.org/stable/modules/ensemble.html#histogram-based-gradient-boosting),
+[probability calibration](https://scikit-learn.org/stable/modules/calibration.html),
+and [time-ordered validation with gaps](https://scikit-learn.org/stable/modules/generated/sklearn.model_selection.TimeSeriesSplit.html).
 
 ## NumPy-style intraday range dashboard
 

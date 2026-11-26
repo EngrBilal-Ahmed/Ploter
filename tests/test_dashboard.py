@@ -125,6 +125,9 @@ class EligibleDashboardTests(unittest.TestCase):
         result = load_dashboard_overview(self.database, self.eligible)
         self.assertEqual([row["symbol"] for row in result["rows"]], ["ABC"])
         self.assertEqual(result["missing"], ["DEF"])
+        self.assertEqual(result["rows"][0]["rank"], 1)
+        self.assertIsNone(result["rows"][0]["upper_probability_pct"])
+        self.assertEqual(result["prediction"]["state"], "unavailable")
         self.assertEqual(self.query(
             "SELECT COUNT(*) FROM stock_prices WHERE symbol = 'NOT_ELIGIBLE'"
         ), [(2,)])
@@ -206,6 +209,59 @@ class EligibleDashboardTests(unittest.TestCase):
 
 
 class DashboardInteractionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_probability_columns_diagnostics_and_filters_keep_global_ranks(self):
+        from nicegui import ui
+        from nicegui.testing import user_simulation
+        from psx_stock_tool.dashboard import build_dashboard
+
+        prediction = {
+            "state": "experimental", "message": "Experimental calibrated ranking.",
+            "as_of": "2025-02-03", "ranked_candidates": 2,
+            "training_rows": 1000, "training_end": "2024-06-01",
+            "calibration_rows": 200, "calibration_end": "2024-10-01",
+            "validation_start": "2024-10-02", "validation_end": "2025-02-03",
+            "validation_rows": 200, "validation_sessions": 20,
+            "top_10_hit_pct": 45.0, "base_rate_pct": 3.0,
+            "top_10_evaluable": 199, "top_10_picks": 200, "top_10_coverage_pct": 99.5,
+            "brier": 0.02, "baseline_brier": 0.03,
+        }
+        overview = {
+            "stocks": {"ABC": "ABC Ltd", "DEF": "DEF Ltd"}, "latest": "2025-02-03",
+            "missing": [], "prediction": prediction, "rows": [
+                {"symbol": "DEF", "name": "DEF Ltd", "rank": 1,
+                 "upper_probability_pct": 30.12345, "ranking_status": "Experimental estimate",
+                 "stale": False, "date": "2025-02-03", "priority": 2},
+                {"symbol": "ABC", "name": "ABC Ltd", "rank": 2,
+                 "upper_probability_pct": 10.5, "ranking_status": "Experimental estimate",
+                 "stale": False, "date": "2025-02-03", "priority": 0},
+            ],
+        }
+
+        async def page():
+            await build_dashboard("unused.db", "unused.xml")
+
+        with patch("psx_stock_tool.dashboard.load_dashboard_overview", return_value=overview), patch(
+            "psx_stock_tool.dashboard.load_symbol_analysis", return_value=analyze_prices(prices())
+        ):
+            async with user_simulation() as user:
+                ui.page("/")(page)
+                await user.open("/")
+                await user.should_see("Analysis loaded from SQLite.", retries=100)
+                await user.should_see("Top-10 evaluable hit rate: 45.0%")
+                await user.should_see("Pick coverage: 199/200")
+                watch = min(user.find(ui.table).elements, key=lambda table: table.id)
+                self.assertEqual([row["rank"] for row in watch.rows], [1, 2])
+                self.assertEqual(watch.rows[0]["upper_probability_pct"], 30.123)
+                user.find("Search symbol or company").type("ABC")
+                self.assertEqual([row["rank"] for row in watch.rows], [2])
+                user.find("Search symbol or company").clear()
+                user.find("Signals only").click()
+                self.assertEqual([row["rank"] for row in watch.rows], [1])
+                prediction["top_10_hit_pct"] = None
+                user.find("Reload analysis").click()
+                await user.should_see("Top-10 evaluable hit rate: unavailable", retries=100)
+                self.assertEqual([row["rank"] for row in watch.rows], [1])
+
     async def test_dashboard_loads_charts_searches_and_syncs_with_refresh(self):
         from nicegui import ui
         from nicegui.testing import user_simulation
@@ -240,8 +296,14 @@ class DashboardInteractionTests(unittest.IsolatedAsyncioTestCase):
                 user.find("Search symbol or company").type("NOT_FOUND")
                 watch = min(user.find(ui.table).elements, key=lambda table: table.id)
                 self.assertEqual(watch.rows, [])
+                self.assertTrue({"rank", "upper_probability_pct", "ranking_status"}.issubset(
+                    {column["field"] for column in watch.columns}
+                ))
                 user.find("Search symbol or company").clear()
                 self.assertEqual(len(watch.rows), 1)
+                self.assertEqual(watch.rows[0]["rank"], 1)
+                self.assertIsNone(watch.rows[0]["upper_probability_pct"])
+                await user.should_see("Need at least 120 usable historical sessions")
                 user.find("Refresh past X calendar days").clear().type("7")
                 with patch("psx_stock_tool.dashboard.sync_eligible_prices",
                            return_value=DashboardSyncResult(requested=1)) as sync:
